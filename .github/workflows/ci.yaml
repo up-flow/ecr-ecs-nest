@@ -4,7 +4,12 @@ on:
   pull_request:
     branches: [main]
 
-name: Node Project `ecr-ecs-nest` CI on ECR
+name: ecr-ecs-nest pipeline
+
+permissions:
+  id-token: write
+  contents: read
+  packages: write
 
 jobs:
   build:
@@ -30,39 +35,35 @@ jobs:
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
+    environment: ci
     needs: build
 
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Secrets
-        run: |
-          echo "REGION"
-          echo ${{ secrets.AWS_REGION }}
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
+          audience: sts.amazonaws.com
+          role-to-assume: ${{ secrets.AWS_ROLE_ASSUME }}
+          role-session-name: github-session
 
       - name: Login to Amazon ECR
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build, tag, and push the image to Amazon ECR
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.AWS_ECR_REPO_NAME }}
+          ECR_REPOSITORY: ${{ vars.AWS_ECR_REPO_NAME }}
         run: |
-          IMAGE_TAG=$(cat package.json \
-            | grep version \
-            | head -1 \
-            | awk -F: '{ print $2 }' \
-            | sed 's/[",]//g')
+          WEBAPP_VERSION=$(node -p -e "require('./package.json').version")
+          IMAGE=$ECR_REGISTRY/${{ vars.AWS_ECR_WORKSPACE }}/${GITHUB_REPOSITORY#*/}:$WEBAPP_VERSION
+          echo "Image is $IMAGE"
           # Build a docker container and push it to ECR 
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          # echo "Pushing image to ECR..."
-          # docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker build -t $IMAGE .
+          echo "Pushing image $IMAGE to ECR..."
+          docker push $IMAGE
+          # echo "::set-output name=image::$IMAGE"
